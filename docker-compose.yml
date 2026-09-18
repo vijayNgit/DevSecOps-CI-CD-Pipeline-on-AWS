@@ -1,0 +1,24 @@
+docker compose configuration
+services:
+  jenkins:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM jenkins/jenkins:lts
+        USER root
+        RUN apt-get update && apt-get install -y docker.io awscli curl wget
+        RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+        RUN wget -O /usr/local/bin/hadolint https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64 && chmod +x /usr/local/bin/hadolint
+        RUN mkdir -p /usr/share/jenkins/ref/init.groovy.d
+        RUN echo 'import jenkins.model.*; import hudson.security.*; def instance = Jenkins.getInstance(); instance.setAuthorizationStrategy(new AuthorizationStrategy.Unsecured()); instance.setSecurityRealm(new HudsonPrivateSecurityRealm(false)); instance.save()' > /usr/share/jenkins/ref/init.groovy.d/disable-auth.groovy
+        USER jenkins
+    container_name: devsecops-jenkins
+    restart: always
+    user: root
+    environment:
+      - JAVA_OPTS=-Xmx512m -Xms256m -Djenkins.install.runSetupWizard=true
+    ports:
+      - "80:8080"
+    volumes:
+      - ./jenkins-data:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
