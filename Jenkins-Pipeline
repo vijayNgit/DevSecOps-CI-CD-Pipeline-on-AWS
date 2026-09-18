@@ -1,0 +1,88 @@
+Jenkins pipeline script(Replace YOUR_SNS_TOPIC_ARN_HERE with the Topic ARN you copied)
+
+
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = "devsecops-lab-app"
+        IMAGE_TAG  = "${env.BUILD_NUMBER}"
+        SNS_TOPIC  = "YOUR_SNS_TOPIC_ARN_HERE"
+        NO_COLOR   = "true"
+    }
+
+    stages {
+        stage('Generate Application Code') {
+            steps {
+                script {
+                    echo "Creating malicious Dockerfile on purpose..."
+                    writeFile file: 'index.html', text: '<h1>Welcome to the DevSecOps Lab!</h1>'
+                    writeFile file: 'Dockerfile', text: '''
+FROM nginx:1.19.0-alpine
+MAINTAINER "lab-student"
+COPY index.html /usr/share/nginx/html/index.html
+                    '''
+                }
+            }
+        }
+
+        stage('Lint Dockerfile (Hadolint)') {
+            steps {
+                script {
+                    echo "Checking Dockerfile for bad practices..."
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                        sh "hadolint Dockerfile > hadolint_report.txt"
+                    }
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    echo "Building Docker Image..."
+                    sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
+                }
+            }
+        }
+
+        stage('Scan Image (Trivy)') {
+            steps {
+                script {
+                    echo "Scanning Image for CVE Vulnerabilities..."
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                        sh "trivy image --severity HIGH,CRITICAL --no-progress --exit-code 1 ${IMAGE_NAME}:${IMAGE_TAG} > trivy_report.txt"
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                echo "Formatting and Sending Combined Report..."
+                sh """
+                    echo "======================================" > final_report.txt
+                    echo "    HADOLINT DOCKERFILE ANALYSIS      " >> final_report.txt
+                    echo "======================================" >> final_report.txt
+                    cat hadolint_report.txt >> final_report.txt
+
+                    echo "" >> final_report.txt
+                    echo "======================================" >> final_report.txt
+                    echo "      TRIVY IMAGE CVE REPORT          " >> final_report.txt
+                    echo "======================================" >> final_report.txt
+                    cat trivy_report.txt >> final_report.txt
+
+                    REPORT=\$(cat final_report.txt)
+
+                    aws sns publish \
+                        --topic-arn ${SNS_TOPIC} \
+                        --subject "Security Scan Result: Build #${IMAGE_TAG}" \
+                        --message "\$REPORT" \
+                        --region us-east-1
+                """
+            }
+        }
+    }
+}
